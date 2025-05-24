@@ -1,6 +1,6 @@
 import { FastifyPluginAsyncTypebox } from '@fastify/type-provider-typebox';
 import { createGqlResponseSchema, gqlResponseSchema } from './schemas.js';
-import { graphql, GraphQLSchema, GraphQLObjectType, GraphQLString, GraphQLFloat, GraphQLList, GraphQLNonNull, GraphQLBoolean, GraphQLInt, GraphQLScalarType, Kind, GraphQLInputObjectType, GraphQLOutputType, GraphQLType } from 'graphql';
+import { graphql, GraphQLSchema, GraphQLObjectType, GraphQLString, GraphQLFloat, GraphQLList, GraphQLNonNull, GraphQLBoolean, GraphQLInt, GraphQLScalarType, Kind, GraphQLInputObjectType, GraphQLOutputType, GraphQLType, execute, parse, validate } from 'graphql';
 import depthLimit from 'graphql-depth-limit';
 import { createLoaders, shouldIncludeSubscriptions } from './loaders.js';
 
@@ -420,9 +420,16 @@ const plugin: FastifyPluginAsyncTypebox = async (fastify) => {
     },
     async handler(req) {
       const { query, variables } = req.body;
-      const result = await graphql({
+      const document = parse(query);
+      const validationErrors = validate(schema, document, [depthLimit(5)]);
+      
+      if (validationErrors.length > 0) {
+        return { errors: validationErrors };
+      }
+
+      const result = await execute({
         schema,
-        source: query,
+        document,
         variableValues: variables,
         contextValue: { prisma, loaders },
       });
