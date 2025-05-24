@@ -79,4 +79,4 @@ export const shouldIncludeSubscriptions = (info: any): boolean => {
     parsedInfo.fieldsByTypeName.User?.userSubscribedTo !== undefined ||
     parsedInfo.fieldsByTypeName.User?.subscribedToUser !== undefined
   );
-}; 
+};

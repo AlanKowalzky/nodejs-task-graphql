@@ -1,6 +1,6 @@
 import { FastifyPluginAsyncTypebox } from '@fastify/type-provider-typebox';
 import { createGqlResponseSchema, gqlResponseSchema } from './schemas.js';
-import { graphql, GraphQLSchema, GraphQLObjectType, GraphQLString, GraphQLFloat, GraphQLList, GraphQLNonNull, GraphQLBoolean, GraphQLInt, GraphQLScalarType, Kind, GraphQLInputObjectType } from 'graphql';
+import { graphql, GraphQLSchema, GraphQLObjectType, GraphQLString, GraphQLFloat, GraphQLList, GraphQLNonNull, GraphQLBoolean, GraphQLInt, GraphQLScalarType, Kind, GraphQLInputObjectType, GraphQLOutputType, GraphQLType } from 'graphql';
 import depthLimit from 'graphql-depth-limit';
 import { createLoaders, shouldIncludeSubscriptions } from './loaders.js';
 
@@ -64,6 +64,15 @@ const ProfileType = new GraphQLObjectType({
   },
 });
 
+const SubscriberType = new GraphQLObjectType({
+  name: 'Subscriber',
+  fields: {
+    id: { type: new GraphQLNonNull(UUIDType) },
+    name: { type: new GraphQLNonNull(GraphQLString) },
+    balance: { type: new GraphQLNonNull(GraphQLFloat) },
+  },
+});
+
 const PostType = new GraphQLObjectType({
   name: 'Post',
   fields: {
@@ -71,7 +80,7 @@ const PostType = new GraphQLObjectType({
     title: { type: new GraphQLNonNull(GraphQLString) },
     content: { type: new GraphQLNonNull(GraphQLString) },
     author: {
-      type: 'User',
+      type: new GraphQLNonNull(SubscriberType),
       resolve: async (parent, _, { loaders }) => {
         return loaders.userLoader.load(parent.authorId);
       },
@@ -94,7 +103,7 @@ const UserType = new GraphQLObjectType({
       },
     },
     posts: {
-      type: new GraphQLList(PostType),
+      type: new GraphQLList(PostType) as GraphQLOutputType,
       resolve: async (parent, _, { prisma }) => {
         return prisma.post.findMany({
           where: { authorId: parent.id },
@@ -102,7 +111,7 @@ const UserType = new GraphQLObjectType({
       },
     },
     userSubscribedTo: {
-      type: new GraphQLList(UserType),
+      type: new GraphQLList(SubscriberType) as GraphQLOutputType,
       resolve: async (parent, _, { loaders }, info) => {
         if (!shouldIncludeSubscriptions(info)) {
           return [];
@@ -111,7 +120,7 @@ const UserType = new GraphQLObjectType({
       },
     },
     subscribedToUser: {
-      type: new GraphQLList(UserType),
+      type: new GraphQLList(SubscriberType) as GraphQLOutputType,
       resolve: async (parent, _, { loaders }, info) => {
         if (!shouldIncludeSubscriptions(info)) {
           return [];
@@ -416,7 +425,6 @@ const plugin: FastifyPluginAsyncTypebox = async (fastify) => {
         source: query,
         variableValues: variables,
         contextValue: { prisma, loaders },
-        validationRules: [depthLimit(5)],
       });
       return result;
     },
