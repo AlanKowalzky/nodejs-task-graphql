@@ -2,34 +2,8 @@ import { FastifyPluginAsyncTypebox } from '@fastify/type-provider-typebox';
 import { createGqlResponseSchema, gqlResponseSchema } from './schemas.js';
 import { graphql, GraphQLSchema, GraphQLObjectType, GraphQLString, GraphQLFloat, GraphQLList, GraphQLNonNull, GraphQLBoolean, GraphQLInt, GraphQLScalarType, Kind, GraphQLInputObjectType, GraphQLOutputType, GraphQLType, execute, parse, validate } from 'graphql';
 import depthLimit from 'graphql-depth-limit';
-import { createLoaders, shouldIncludeSubscriptions } from './loaders.js';
+import { createLoaders, shouldIncludeSubscriptions, getSubscriptionFields } from './loaders.js';
 import { User, Post, Profile, MemberType } from '@prisma/client';
-import { FastifyInstance, FastifyRequest } from 'fastify';
-
-// Style configs
-const GRAPHQL_CONFIG = {
-  maxDepth: 5,
-  maxComplexity: 100,
-  maxCost: 1000,
-  maxBatchSize: 100,
-  cacheTTL: 3600,
-  rateLimit: {
-    window: 15 * 60 * 1000, // 15 minutes
-    max: 100 // limit each IP to 100 requests per windowMs
-  }
-};
-
-// Definicja typu dla kontekstu GraphQL
-interface GraphQLContext {
-  prisma: any;
-  loaders: ReturnType<typeof createLoaders>;
-  req: FastifyRequest;
-  requestId: string;
-  timestamp: string;
-  userAgent?: string;
-  ip: string;
-  fastify: FastifyInstance;
-}
 
 const UUIDType = new GraphQLScalarType({
   name: 'UUID',
@@ -115,56 +89,32 @@ UserType = new GraphQLObjectType({
     balance: { type: new GraphQLNonNull(GraphQLFloat) },
     profile: {
       type: ProfileType,
-      resolve: async (parent: User, _: any, context: GraphQLContext) => {
-        context.fastify.log.debug({
-          requestId: context.requestId,
-          operation: 'getUserProfile',
-          userId: parent.id,
-          timestamp: context.timestamp,
-        });
-        return context.loaders.profileLoader.load(parent.id);
+      resolve: async (parent: User, _, { loaders }) => {
+        return loaders.profileLoader.load(parent.id);
       },
     },
     posts: {
       type: new GraphQLList(PostType) as GraphQLOutputType,
-      resolve: async (parent: User, _: any, context: GraphQLContext) => {
-        context.fastify.log.debug({
-          requestId: context.requestId,
-          operation: 'getUserPosts',
-          userId: parent.id,
-          timestamp: context.timestamp,
-        });
-        return context.loaders.postLoader.load(parent.id);
+      resolve: async (parent: User, _, { loaders }) => {
+        return loaders.postLoader.load(parent.id);
       },
     },
     userSubscribedTo: {
       type: new GraphQLList(UserType) as GraphQLOutputType,
-      resolve: async (parent: User, _: any, context: GraphQLContext, info: any) => {
+      resolve: async (parent: User, _, { loaders }, info) => {
         if (!shouldIncludeSubscriptions(info)) {
           return [];
         }
-        context.fastify.log.debug({
-          requestId: context.requestId,
-          operation: 'getUserSubscriptions',
-          userId: parent.id,
-          timestamp: context.timestamp,
-        });
-        return context.loaders.userSubscriptionsLoader.load(parent.id);
+        return loaders.userSubscriptionsLoader.load(parent.id);
       },
     },
     subscribedToUser: {
       type: new GraphQLList(UserType) as GraphQLOutputType,
-      resolve: async (parent: User, _: any, context: GraphQLContext, info: any) => {
+      resolve: async (parent: User, _, { loaders }, info) => {
         if (!shouldIncludeSubscriptions(info)) {
           return [];
         }
-        context.fastify.log.debug({
-          requestId: context.requestId,
-          operation: 'getUserSubscribers',
-          userId: parent.id,
-          timestamp: context.timestamp,
-        });
-        return context.loaders.userSubscribersLoader.load(parent.id);
+        return loaders.userSubscribersLoader.load(parent.id);
       },
     },
   }),
@@ -260,61 +210,50 @@ const schema = new GraphQLSchema({
       },
       users: {
         type: new GraphQLList(UserType),
-        resolve: async (_, __, { prisma, loaders }) => {
-          const users = await prisma.user.findMany();
+        resolve: async (_, __, { prisma, loaders }, info) => {
+          const include: any = {
+            posts: true,
+            profile: {
+              include: {
+                memberType: true
+              }
+            }
+          };
+
+          const subscriptionFields = getSubscriptionFields(info);
+          if (subscriptionFields.userSubscribedTo) {
+            include.userSubscribedTo = true;
+          }
+          if (subscriptionFields.subscribedToUser) {
+            include.subscribedToUser = true;
+          }
+
+          const users = await prisma.user.findMany({
+            include
+          });
           
-          // Prime the userLoader with all users
           users.forEach(user => {
             loaders.userLoader.prime(user.id, user);
-          });
-
-          // Prime the postLoader with all posts
-          const posts = await prisma.post.findMany();
-          const postMap = new Map<string, Post[]>();
-          posts.forEach(post => {
-            const userPosts = postMap.get(post.authorId) || [];
-            userPosts.push(post);
-            postMap.set(post.authorId, userPosts);
-          });
-          postMap.forEach((userPosts, userId) => {
-            loaders.postLoader.prime(userId, userPosts);
-          });
-
-          // Prime the profileLoader with all profiles
-          const profiles = await prisma.profile.findMany();
-          profiles.forEach(profile => {
-            loaders.profileLoader.prime(profile.userId, profile);
-          });
-
-          // Prime the memberTypeLoader with all member types
-          const memberTypes = await prisma.memberType.findMany();
-          memberTypes.forEach(memberType => {
-            loaders.memberTypeLoader.prime(memberType.id, memberType);
-          });
-
-          // Prime the subscription loaders
-          const subscriptions = await prisma.subscribersOnAuthors.findMany({
-            include: {
-              author: true,
-              subscriber: true,
-            },
-          });
-          const subscriptionMap = new Map<string, User[]>();
-          const subscriberMap = new Map<string, User[]>();
-          subscriptions.forEach(sub => {
-            const userSubscriptions = subscriptionMap.get(sub.subscriberId) || [];
-            userSubscriptions.push(sub.author);
-            subscriptionMap.set(sub.subscriberId, userSubscriptions);
             
-            const userSubscribers = subscriberMap.get(sub.authorId) || [];
-            userSubscribers.push(sub.subscriber);
-            subscriberMap.set(sub.authorId, userSubscribers);
-          });
-          subscriptionMap.forEach((userSubscriptions, userId) => {
-            loaders.userSubscriptionsLoader.prime(userId, userSubscriptions);
-          });
-          subscriberMap.forEach((userSubscribers, userId) => {
-            loaders.userSubscribersLoader.prime(userId, userSubscribers);
+            if (user.posts) {
+              loaders.postLoader.prime(user.id, user.posts);
+            }
+            
+            if (user.profile) {
+              loaders.profileLoader.prime(user.id, user.profile);
+              
+              if (user.profile.memberType) {
+                loaders.memberTypeLoader.prime(user.profile.memberTypeId, user.profile.memberType);
+              }
+            }
+
+            if (user.userSubscribedTo) {
+              loaders.userSubscriptionsLoader.prime(user.id, user.userSubscribedTo);
+            }
+
+            if (user.subscribedToUser) {
+              loaders.userSubscribersLoader.prime(user.id, user.subscribedToUser);
+            }
           });
 
           return users;
@@ -513,56 +452,21 @@ const plugin: FastifyPluginAsyncTypebox = async (fastify) => {
     async handler(req) {
       const { query, variables } = req.body;
       const document = parse(query);
-      const validationErrors = validate(schema, document, [
-        depthLimit(GRAPHQL_CONFIG.maxDepth),
-      ]);
+      const validationErrors = validate(schema, document, [depthLimit(5)]);
       
       if (validationErrors.length > 0) {
         return { errors: validationErrors };
       }
 
-      const context: GraphQLContext = {
-        prisma,
-        loaders,
-        req,
-        requestId: req.id,
-        timestamp: new Date().toISOString(),
-        userAgent: req.headers['user-agent'],
-        ip: req.ip,
-        fastify,
-      };
-
       const result = await execute({
         schema,
         document,
         variableValues: variables,
-        contextValue: context,
+        contextValue: { prisma, loaders },
       });
-
-      fastify.log.info({
-        requestId: req.id,
-        query: query,
-        variables: variables,
-        timestamp: new Date().toISOString(),
-        userAgent: req.headers['user-agent'],
-        ip: req.ip,
-        errors: result.errors,
-      });
-
       return result;
     },
   });
 };
-
-// Funkcje pomocnicze do obliczania złożoności i kosztu zapytania
-function calculateQueryComplexity(document: any): number {
-  // Implementacja obliczania złożoności zapytania
-  return 0; // TODO: Implement
-}
-
-function calculateQueryCost(document: any): number {
-  // Implementacja obliczania kosztu zapytania
-  return 0; // TODO: Implement
-}
 
 export default plugin;
