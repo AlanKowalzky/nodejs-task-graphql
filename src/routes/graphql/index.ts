@@ -3,6 +3,33 @@ import { createGqlResponseSchema, gqlResponseSchema } from './schemas.js';
 import { graphql, GraphQLSchema, GraphQLObjectType, GraphQLString, GraphQLFloat, GraphQLList, GraphQLNonNull, GraphQLBoolean, GraphQLInt, GraphQLScalarType, Kind, GraphQLInputObjectType, GraphQLOutputType, GraphQLType, execute, parse, validate } from 'graphql';
 import depthLimit from 'graphql-depth-limit';
 import { createLoaders, shouldIncludeSubscriptions } from './loaders.js';
+import { User, Post, Profile, MemberType } from '@prisma/client';
+import { FastifyInstance, FastifyRequest } from 'fastify';
+
+// Style configs
+const GRAPHQL_CONFIG = {
+  maxDepth: 5,
+  maxComplexity: 100,
+  maxCost: 1000,
+  maxBatchSize: 100,
+  cacheTTL: 3600,
+  rateLimit: {
+    window: 15 * 60 * 1000, // 15 minutes
+    max: 100 // limit each IP to 100 requests per windowMs
+  }
+};
+
+// Definicja typu dla kontekstu GraphQL
+interface GraphQLContext {
+  prisma: any;
+  loaders: ReturnType<typeof createLoaders>;
+  req: FastifyRequest;
+  requestId: string;
+  timestamp: string;
+  userAgent?: string;
+  ip: string;
+  fastify: FastifyInstance;
+}
 
 const UUIDType = new GraphQLScalarType({
   name: 'UUID',
@@ -38,6 +65,9 @@ const MemberTypeIdType = new GraphQLScalarType({
   },
 });
 
+let PostType: GraphQLObjectType;
+let UserType: GraphQLObjectType;
+
 const MemberTypeType = new GraphQLObjectType({
   name: 'MemberType',
   fields: {
@@ -55,80 +85,89 @@ const ProfileType = new GraphQLObjectType({
     yearOfBirth: { type: new GraphQLNonNull(GraphQLInt) },
     memberType: {
       type: MemberTypeType,
-      resolve: async (parent, _, { prisma }) => {
-        return prisma.memberType.findUnique({
-          where: { id: parent.memberTypeId },
-        });
+      resolve: async (parent, _, { loaders }) => {
+        return loaders.memberTypeLoader.load(parent.memberTypeId);
       },
     },
   },
 });
 
-const SubscriberType = new GraphQLObjectType({
-  name: 'Subscriber',
-  fields: {
-    id: { type: new GraphQLNonNull(UUIDType) },
-    name: { type: new GraphQLNonNull(GraphQLString) },
-    balance: { type: new GraphQLNonNull(GraphQLFloat) },
-  },
-});
-
-const PostType = new GraphQLObjectType({
+PostType = new GraphQLObjectType({
   name: 'Post',
-  fields: {
+  fields: () => ({
     id: { type: new GraphQLNonNull(UUIDType) },
     title: { type: new GraphQLNonNull(GraphQLString) },
     content: { type: new GraphQLNonNull(GraphQLString) },
     author: {
-      type: new GraphQLNonNull(SubscriberType),
+      type: new GraphQLNonNull(UserType),
       resolve: async (parent, _, { loaders }) => {
         return loaders.userLoader.load(parent.authorId);
       },
     },
-  },
+  }),
 });
 
-const UserType = new GraphQLObjectType({
+UserType = new GraphQLObjectType({
   name: 'User',
-  fields: {
+  fields: () => ({
     id: { type: new GraphQLNonNull(UUIDType) },
     name: { type: new GraphQLNonNull(GraphQLString) },
     balance: { type: new GraphQLNonNull(GraphQLFloat) },
     profile: {
       type: ProfileType,
-      resolve: async (parent, _, { prisma }) => {
-        return prisma.profile.findUnique({
-          where: { userId: parent.id },
+      resolve: async (parent: User, _: any, context: GraphQLContext) => {
+        context.fastify.log.debug({
+          requestId: context.requestId,
+          operation: 'getUserProfile',
+          userId: parent.id,
+          timestamp: context.timestamp,
         });
+        return context.loaders.profileLoader.load(parent.id);
       },
     },
     posts: {
       type: new GraphQLList(PostType) as GraphQLOutputType,
-      resolve: async (parent, _, { prisma }) => {
-        return prisma.post.findMany({
-          where: { authorId: parent.id },
+      resolve: async (parent: User, _: any, context: GraphQLContext) => {
+        context.fastify.log.debug({
+          requestId: context.requestId,
+          operation: 'getUserPosts',
+          userId: parent.id,
+          timestamp: context.timestamp,
         });
+        return context.loaders.postLoader.load(parent.id);
       },
     },
     userSubscribedTo: {
-      type: new GraphQLList(SubscriberType) as GraphQLOutputType,
-      resolve: async (parent, _, { loaders }, info) => {
+      type: new GraphQLList(UserType) as GraphQLOutputType,
+      resolve: async (parent: User, _: any, context: GraphQLContext, info: any) => {
         if (!shouldIncludeSubscriptions(info)) {
           return [];
         }
-        return loaders.userSubscriptionsLoader.load(parent.id);
+        context.fastify.log.debug({
+          requestId: context.requestId,
+          operation: 'getUserSubscriptions',
+          userId: parent.id,
+          timestamp: context.timestamp,
+        });
+        return context.loaders.userSubscriptionsLoader.load(parent.id);
       },
     },
     subscribedToUser: {
-      type: new GraphQLList(SubscriberType) as GraphQLOutputType,
-      resolve: async (parent, _, { loaders }, info) => {
+      type: new GraphQLList(UserType) as GraphQLOutputType,
+      resolve: async (parent: User, _: any, context: GraphQLContext, info: any) => {
         if (!shouldIncludeSubscriptions(info)) {
           return [];
         }
-        return loaders.userSubscribersLoader.load(parent.id);
+        context.fastify.log.debug({
+          requestId: context.requestId,
+          operation: 'getUserSubscribers',
+          userId: parent.id,
+          timestamp: context.timestamp,
+        });
+        return context.loaders.userSubscribersLoader.load(parent.id);
       },
     },
-  },
+  }),
 });
 
 const CreateUserInputType = new GraphQLInputObjectType({
@@ -198,10 +237,8 @@ const schema = new GraphQLSchema({
         args: {
           id: { type: new GraphQLNonNull(MemberTypeIdType) },
         },
-        resolve: async (_, { id }, { prisma }) => {
-          return prisma.memberType.findUnique({
-            where: { id },
-          });
+        resolve: async (_, { id }, { loaders }) => {
+          return loaders.memberTypeLoader.load(id);
         },
       },
       posts: {
@@ -223,9 +260,64 @@ const schema = new GraphQLSchema({
       },
       users: {
         type: new GraphQLList(UserType),
-        resolve: async (_, __, { loaders }) => {
-          const users = await loaders.userLoader.loadMany(['*']);
-          return users.filter(user => user !== null);
+        resolve: async (_, __, { prisma, loaders }) => {
+          const users = await prisma.user.findMany();
+          
+          // Prime the userLoader with all users
+          users.forEach(user => {
+            loaders.userLoader.prime(user.id, user);
+          });
+
+          // Prime the postLoader with all posts
+          const posts = await prisma.post.findMany();
+          const postMap = new Map<string, Post[]>();
+          posts.forEach(post => {
+            const userPosts = postMap.get(post.authorId) || [];
+            userPosts.push(post);
+            postMap.set(post.authorId, userPosts);
+          });
+          postMap.forEach((userPosts, userId) => {
+            loaders.postLoader.prime(userId, userPosts);
+          });
+
+          // Prime the profileLoader with all profiles
+          const profiles = await prisma.profile.findMany();
+          profiles.forEach(profile => {
+            loaders.profileLoader.prime(profile.userId, profile);
+          });
+
+          // Prime the memberTypeLoader with all member types
+          const memberTypes = await prisma.memberType.findMany();
+          memberTypes.forEach(memberType => {
+            loaders.memberTypeLoader.prime(memberType.id, memberType);
+          });
+
+          // Prime the subscription loaders
+          const subscriptions = await prisma.subscribersOnAuthors.findMany({
+            include: {
+              author: true,
+              subscriber: true,
+            },
+          });
+          const subscriptionMap = new Map<string, User[]>();
+          const subscriberMap = new Map<string, User[]>();
+          subscriptions.forEach(sub => {
+            const userSubscriptions = subscriptionMap.get(sub.subscriberId) || [];
+            userSubscriptions.push(sub.author);
+            subscriptionMap.set(sub.subscriberId, userSubscriptions);
+            
+            const userSubscribers = subscriberMap.get(sub.authorId) || [];
+            userSubscribers.push(sub.subscriber);
+            subscriberMap.set(sub.authorId, userSubscribers);
+          });
+          subscriptionMap.forEach((userSubscriptions, userId) => {
+            loaders.userSubscriptionsLoader.prime(userId, userSubscriptions);
+          });
+          subscriberMap.forEach((userSubscribers, userId) => {
+            loaders.userSubscribersLoader.prime(userId, userSubscribers);
+          });
+
+          return users;
         },
       },
       user: {
@@ -421,21 +513,56 @@ const plugin: FastifyPluginAsyncTypebox = async (fastify) => {
     async handler(req) {
       const { query, variables } = req.body;
       const document = parse(query);
-      const validationErrors = validate(schema, document, [depthLimit(5)]);
+      const validationErrors = validate(schema, document, [
+        depthLimit(GRAPHQL_CONFIG.maxDepth),
+      ]);
       
       if (validationErrors.length > 0) {
         return { errors: validationErrors };
       }
 
+      const context: GraphQLContext = {
+        prisma,
+        loaders,
+        req,
+        requestId: req.id,
+        timestamp: new Date().toISOString(),
+        userAgent: req.headers['user-agent'],
+        ip: req.ip,
+        fastify,
+      };
+
       const result = await execute({
         schema,
         document,
         variableValues: variables,
-        contextValue: { prisma, loaders },
+        contextValue: context,
       });
+
+      fastify.log.info({
+        requestId: req.id,
+        query: query,
+        variables: variables,
+        timestamp: new Date().toISOString(),
+        userAgent: req.headers['user-agent'],
+        ip: req.ip,
+        errors: result.errors,
+      });
+
       return result;
     },
   });
 };
+
+// Funkcje pomocnicze do obliczania złożoności i kosztu zapytania
+function calculateQueryComplexity(document: any): number {
+  // Implementacja obliczania złożoności zapytania
+  return 0; // TODO: Implement
+}
+
+function calculateQueryCost(document: any): number {
+  // Implementacja obliczania kosztu zapytania
+  return 0; // TODO: Implement
+}
 
 export default plugin;
