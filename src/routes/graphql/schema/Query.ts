@@ -1,7 +1,8 @@
-import { GraphQLFieldResolver, GraphQLResolveInfo } from 'graphql';
+import { GraphQLFieldResolver, GraphQLResolveInfo, GraphQLObjectType, GraphQLList, GraphQLNonNull, GraphQLID, GraphQLString } from 'graphql';
 import { User, Post, Profile, MemberType } from '@prisma/client';
-import { GraphQLContext } from '../context';
-import { shouldIncludeSubscriptions } from '../loaders';
+import { GraphQLContext } from '../context.js';
+import { shouldIncludeSubscriptions } from '../loaders.js';
+import { UserTypeGQL, PostTypeGQL, ProfileTypeGQL, MemberTypeGQL } from './types.js';
 
 // Pomocnicza funkcja do sprawdzania, czy obiekt jest użytkownikiem Prisma (podstawowe sprawdzenie)
 function isUser(obj: any): obj is User {
@@ -13,37 +14,20 @@ export const QueryResolvers: Record<string, GraphQLFieldResolver<unknown, GraphQ
     const includeSubs = shouldIncludeSubscriptions(info);
     const usersFromDb = await context.prisma.user.findMany({
       include: {
-        // Warunkowe dołączanie zagnieżdżonych obiektów User dla autora i subskrybenta
-        userSubscribedTo: includeSubs
-          ? {
-              include: {
-                author: true, // Teraz sub.author będzie obiektem User
-              },
-            }
-          : false,
-        subscribedToUser: includeSubs
-          ? {
-              include: {
-                subscriber: true, // Teraz sub.subscriber będzie obiektem User
-              },
-            }
-          : false,
+        userSubscribedTo: includeSubs,
+        subscribedToUser: includeSubs,
       },
     });
 
-    // Wypełnianie pamięci podręcznej (cache priming) - test-loader-prime
+    // Wypełnianie pamięci podręcznej (cache priming)
     usersFromDb.forEach(user => {
       context.loaders.userLoader.prime(user.id, user);
       if (includeSubs) {
         user.userSubscribedTo?.forEach(sub => {
-          if (sub.author && isUser(sub.author)) {
-            context.loaders.userLoader.prime(sub.author.id, sub.author);
-          }
+          context.loaders.userLoader.prime(sub.authorId, user);
         });
         user.subscribedToUser?.forEach(sub => {
-          if (sub.subscriber && isUser(sub.subscriber)) {
-            context.loaders.userLoader.prime(sub.subscriber.id, sub.subscriber);
-          }
+          context.loaders.userLoader.prime(sub.subscriberId, user);
         });
       }
     });
@@ -52,21 +36,33 @@ export const QueryResolvers: Record<string, GraphQLFieldResolver<unknown, GraphQ
   user: (_parent, { id }: { id: string }, context: GraphQLContext): Promise<User | null> => {
     return context.loaders.userLoader.load(id);
   },
-  posts: (_parent, _args, context: GraphQLContext): Promise<Post[]> => {
-    return context.prisma.post.findMany(); // Proste pobranie wszystkich postów
+  posts: async (_parent, _args, context: GraphQLContext): Promise<Post[]> => {
+    const posts = await context.prisma.post.findMany();
+    posts.forEach(post => {
+      context.loaders.postLoader.prime(post.authorId, [post]);
+    });
+    return posts;
   },
   post: (_parent, { id }: { id: string }, context: GraphQLContext): Promise<Post | null> => {
     // Zakładamy, że nie ma dedykowanego singlePostLoader, używamy Prisma bezpośrednio
     return context.prisma.post.findUnique({ where: { id } });
   },
-  memberTypes: (_parent, _args, context: GraphQLContext): Promise<MemberType[]> => {
-    return context.prisma.memberType.findMany();
+  memberTypes: async (_parent, _args, context: GraphQLContext): Promise<MemberType[]> => {
+    const memberTypes = await context.prisma.memberType.findMany();
+    memberTypes.forEach(memberType => {
+      context.loaders.memberTypeLoader.prime(memberType.id, memberType);
+    });
+    return memberTypes;
   },
   memberType: (_parent, { id }: { id: string }, context: GraphQLContext): Promise<MemberType | null> => {
     return context.loaders.memberTypeLoader.load(id);
   },
-  profiles: (_parent, _args, context: GraphQLContext): Promise<Profile[]> => {
-    return context.prisma.profile.findMany();
+  profiles: async (_parent, _args, context: GraphQLContext): Promise<Profile[]> => {
+    const profiles = await context.prisma.profile.findMany();
+    profiles.forEach(profile => {
+      context.loaders.profileLoader.prime(profile.userId, profile);
+    });
+    return profiles;
   },
   profile: (_parent, { id }: { id: string }, context: GraphQLContext): Promise<Profile | null> => {
     // Zakładamy, że 'id' to Profile.id, a profileLoader jest kluczowany przez userId.
@@ -77,3 +73,77 @@ export const QueryResolvers: Record<string, GraphQLFieldResolver<unknown, GraphQ
     return context.prisma.profile.findUnique({ where: { id } });
   },
 };
+
+export const QueryTypeGQL = new GraphQLObjectType({
+  name: 'Query',
+  fields: {
+    users: {
+      type: new GraphQLList(new GraphQLNonNull(UserTypeGQL)),
+      resolve: async (_: unknown, __: unknown, context: GraphQLContext) => {
+        return context.prisma.user.findMany();
+      },
+    },
+    user: {
+      type: UserTypeGQL,
+      args: {
+        id: { type: new GraphQLNonNull(GraphQLString) },
+      },
+      resolve: async (_: unknown, { id }: { id: string }, context: GraphQLContext) => {
+        return context.prisma.user.findUnique({
+          where: { id },
+        });
+      },
+    },
+    posts: {
+      type: new GraphQLList(new GraphQLNonNull(PostTypeGQL)),
+      resolve: async (_: unknown, __: unknown, context: GraphQLContext) => {
+        return context.prisma.post.findMany();
+      },
+    },
+    post: {
+      type: PostTypeGQL,
+      args: {
+        id: { type: new GraphQLNonNull(GraphQLString) },
+      },
+      resolve: async (_: unknown, { id }: { id: string }, context: GraphQLContext) => {
+        return context.prisma.post.findUnique({
+          where: { id },
+        });
+      },
+    },
+    memberTypes: {
+      type: new GraphQLList(new GraphQLNonNull(MemberTypeGQL)),
+      resolve: async (_: unknown, __: unknown, context: GraphQLContext) => {
+        return context.prisma.memberType.findMany();
+      },
+    },
+    memberType: {
+      type: MemberTypeGQL,
+      args: {
+        id: { type: new GraphQLNonNull(GraphQLString) },
+      },
+      resolve: async (_: unknown, { id }: { id: string }, context: GraphQLContext) => {
+        return context.prisma.memberType.findUnique({
+          where: { id },
+        });
+      },
+    },
+    profiles: {
+      type: new GraphQLList(new GraphQLNonNull(ProfileTypeGQL)),
+      resolve: async (_: unknown, __: unknown, context: GraphQLContext) => {
+        return context.prisma.profile.findMany();
+      },
+    },
+    profile: {
+      type: ProfileTypeGQL,
+      args: {
+        id: { type: new GraphQLNonNull(GraphQLString) },
+      },
+      resolve: async (_: unknown, { id }: { id: string }, context: GraphQLContext) => {
+        return context.prisma.profile.findUnique({
+          where: { id },
+        });
+      },
+    },
+  },
+});

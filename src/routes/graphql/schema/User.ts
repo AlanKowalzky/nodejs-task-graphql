@@ -1,26 +1,48 @@
-import { GraphQLFieldResolver } from 'graphql';
+import { GraphQLFieldResolver, GraphQLResolveInfo } from 'graphql';
 import { User, Post, Profile } from '@prisma/client';
-import { GraphQLContext } from '../context';
+import { GraphQLContext } from '../context.js';
+import { shouldIncludeSubscriptions } from '../loaders.js';
 
-export const UserTypeResolvers: Record<
-  string,
-  GraphQLFieldResolver<User, GraphQLContext, any>
-> = {
-  posts: (parentUser: User, _args, context: GraphQLContext): Promise<Post[]> => {
-    // Zakładamy, że postLoader jest kluczowany przez authorId (czyli parentUser.id)
-    // i zwraca tablicę postów dla danego autora.
-    return context.loaders.postLoader.load(parentUser.id);
+export const UserTypeResolvers = {
+  id: (user: User) => user.id,
+  name: (user: User) => user.name,
+  balance: (user: User) => user.balance,
+  posts: async (user: User, _: unknown, context: GraphQLContext) => {
+    return context.prisma.post.findMany({
+      where: { authorId: user.id },
+    });
   },
-  profile: (parentUser: User, _args, context: GraphQLContext): Promise<Profile | null> => {
-    // Zakładamy, że profileLoader jest kluczowany przez userId (czyli parentUser.id)
-    return context.loaders.profileLoader.load(parentUser.id);
+  profile: async (user: User, _: unknown, context: GraphQLContext) => {
+    return context.prisma.profile.findUnique({
+      where: { userId: user.id },
+    });
   },
-  userSubscribedTo: (parentUser: User, _args, context: GraphQLContext): Promise<User[]> => {
-    // Ten loader powinien pobierać listę użytkowników, których subskrybuje parentUser
-    return context.loaders.userSubscriptionsLoader.load(parentUser.id);
+  userSubscribedTo: async (user: User, _: unknown, context: GraphQLContext, info: GraphQLResolveInfo) => {
+    if (!shouldIncludeSubscriptions(info)) {
+      return [];
+    }
+    return context.prisma.user.findMany({
+      where: {
+        subscribedToUser: {
+          some: {
+            subscriberId: user.id,
+          },
+        },
+      },
+    });
   },
-  subscribedToUser: (parentUser: User, _args, context: GraphQLContext): Promise<User[]> => {
-    // Ten loader powinien pobierać listę użytkowników, którzy subskrybują parentUser
-    return context.loaders.userSubscribersLoader.load(parentUser.id);
+  subscribedToUser: async (user: User, _: unknown, context: GraphQLContext, info: GraphQLResolveInfo) => {
+    if (!shouldIncludeSubscriptions(info)) {
+      return [];
+    }
+    return context.prisma.user.findMany({
+      where: {
+        userSubscribedTo: {
+          some: {
+            authorId: user.id,
+          },
+        },
+      },
+    });
   },
 };

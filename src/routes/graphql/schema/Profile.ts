@@ -1,14 +1,21 @@
-import { GraphQLFieldResolver } from 'graphql';
 import { Profile, User, MemberType } from '@prisma/client';
 import { GraphQLContext } from '../context.js';
+import { UserTypeGQL, MemberTypeGQL } from './types.js';
 
-type ProfileResolverArgs = Record<string, never>;
-
-export const ProfileTypeResolvers: Record<string, GraphQLFieldResolver<Profile, GraphQLContext, ProfileResolverArgs>> = {
-  user: (parent: Profile, _args: ProfileResolverArgs, context: GraphQLContext): Promise<User | null> => {
-    return context.loaders.userLoader.load(parent.userId);
+export const ProfileTypeResolvers = {
+  id: (profile: Profile) => profile.id,
+  isMale: (profile: Profile) => profile.isMale,
+  yearOfBirth: (profile: Profile) => profile.yearOfBirth,
+  userId: (profile: Profile) => profile.userId,
+  memberTypeId: (profile: Profile) => profile.memberTypeId,
+  user: async (profile: Profile, _: unknown, context: GraphQLContext) => {
+    return context.prisma.user.findUnique({
+      where: { id: profile.userId },
+    });
   },
-  memberType: (parent: Profile, _args: ProfileResolverArgs, context: GraphQLContext): Promise<MemberType | null> => {
-    return context.loaders.memberTypeLoader.load(parent.memberTypeId);
+  memberType: async (profile: Profile, _: unknown, context: GraphQLContext) => {
+    return context.prisma.memberType.findUnique({
+      where: { id: profile.memberTypeId },
+    });
   },
 };

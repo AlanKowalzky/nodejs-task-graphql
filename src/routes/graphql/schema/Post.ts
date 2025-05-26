@@ -1,13 +1,15 @@
-import { GraphQLFieldResolver } from 'graphql';
-import { Post, User } from '@prisma/client';
-import { GraphQLContext } from '../context';
+import { User, Post } from '@prisma/client';
+import { GraphQLContext } from '../context.js';
+import { UserTypeGQL } from './types.js';
 
-export const PostTypeResolvers: Record<
-  string,
-  GraphQLFieldResolver<Post, GraphQLContext, any>
-> = {
-  author: (parentPost: Post, _args, context: GraphQLContext): Promise<User | null> => {
-    // Używamy userLoader do pobrania autora posta na podstawie parentPost.authorId
-    return context.loaders.userLoader.load(parentPost.authorId);
+export const PostTypeResolvers = {
+  id: (post: Post) => post.id,
+  title: (post: Post) => post.title,
+  content: (post: Post) => post.content,
+  authorId: (post: Post) => post.authorId,
+  author: async (post: Post, _: unknown, context: GraphQLContext) => {
+    return context.prisma.user.findUnique({
+      where: { id: post.authorId },
+    });
   },
 };

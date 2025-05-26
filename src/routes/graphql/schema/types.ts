@@ -45,55 +45,28 @@ type UserFields = {
   balance: number;
 };
 
-export const MemberTypeGQL = new GraphQLObjectType<MemberType, GraphQLContext>({
+// Definicje typów obiektów
+export const MemberTypeGQL = new GraphQLObjectType({
   name: 'MemberType',
-  fields: () => ({
-    id: { type: new GraphQLNonNull(GraphQLID) },
-    discount: { type: new GraphQLNonNull(GraphQLFloat) },
-    postsLimitPerMonth: { type: new GraphQLNonNull(GraphQLInt) },
-    // profiles: { type: new GraphQLList(ProfileTypeGQL) } // Jeśli potrzebna jest relacja zwrotna
-  }),
+  fields: {
+    id: { type: GraphQLString },
+    discount: { type: GraphQLFloat },
+    monthPostsLimit: { type: GraphQLInt },
+  },
 });
 
-export const ProfileTypeGQL = new GraphQLObjectType<Profile, GraphQLContext>({
-  name: 'Profile',
-  fields: () => ({
-    id: { type: new GraphQLNonNull(GraphQLID) },
-    isMale: { type: new GraphQLNonNull(GraphQLBoolean) },
-    yearOfBirth: { type: new GraphQLNonNull(GraphQLInt) },
-    user: {
-      type: UserTypeGQL, // Zmienione na UserTypeGQL, aby uniknąć cyklicznej zależności przy starcie
-      resolve: ProfileTypeResolvers.user,
-    },
-    userId: { type: new GraphQLNonNull(GraphQLID) },
-    memberType: {
-      type: MemberTypeGQL,
-      resolve: ProfileTypeResolvers.memberType,
-    },
-    memberTypeId: { type: new GraphQLNonNull(GraphQLString) }, // Zgodnie z Prisma, to String
-  }),
-});
+// Deklarujemy typy przed ich użyciem
+let UserTypeGQL: GraphQLObjectType;
+let PostTypeGQL: GraphQLObjectType;
+let ProfileTypeGQL: GraphQLObjectType;
 
-export const PostTypeGQL = new GraphQLObjectType<Post, GraphQLContext>({
-  name: 'Post',
-  fields: () => ({
-    id: { type: new GraphQLNonNull(GraphQLID) },
-    title: { type: new GraphQLNonNull(GraphQLString) },
-    content: { type: new GraphQLNonNull(GraphQLString) },
-    author: {
-      type: UserTypeGQL,
-      resolve: PostTypeResolvers.author,
-    },
-    authorId: { type: new GraphQLNonNull(GraphQLID) },
-  }),
-});
-
-export const UserTypeGQL = new GraphQLObjectType<User, GraphQLContext>({
+// Inicjalizujemy typy w odpowiedniej kolejności
+UserTypeGQL = new GraphQLObjectType({
   name: 'User',
   fields: () => ({
-    id: { type: new GraphQLNonNull(GraphQLID) },
-    name: { type: GraphQLString }, // Zgodnie ze schematem docelowym, name jest nullowalne
-    balance: { type: new GraphQLNonNull(GraphQLFloat) },
+    id: { type: GraphQLString },
+    name: { type: GraphQLString },
+    balance: { type: GraphQLFloat },
     posts: {
       type: new GraphQLList(new GraphQLNonNull(PostTypeGQL)),
       resolve: UserTypeResolvers.posts,
@@ -113,13 +86,48 @@ export const UserTypeGQL = new GraphQLObjectType<User, GraphQLContext>({
   }),
 });
 
-// Typy wejściowe dla mutacji (DTOs)
+PostTypeGQL = new GraphQLObjectType({
+  name: 'Post',
+  fields: () => ({
+    id: { type: GraphQLString },
+    title: { type: GraphQLString },
+    content: { type: GraphQLString },
+    authorId: { type: GraphQLString },
+    author: {
+      type: UserTypeGQL,
+      resolve: PostTypeResolvers.author,
+    },
+  }),
+});
+
+ProfileTypeGQL = new GraphQLObjectType({
+  name: 'Profile',
+  fields: () => ({
+    id: { type: GraphQLString },
+    isMale: { type: GraphQLBoolean },
+    yearOfBirth: { type: GraphQLInt },
+    userId: { type: GraphQLString },
+    memberTypeId: { type: GraphQLString },
+    user: {
+      type: UserTypeGQL,
+      resolve: ProfileTypeResolvers.user,
+    },
+    memberType: {
+      type: MemberTypeGQL,
+      resolve: ProfileTypeResolvers.memberType,
+    },
+  }),
+});
+
+// Eksportujemy typy
+export { UserTypeGQL, PostTypeGQL, ProfileTypeGQL };
+
+// Typy wejściowe dla mutacji
 export const CreateUserInputGQL = new GraphQLInputObjectType({
   name: 'CreateUserInput',
   fields: {
     name: { type: new GraphQLNonNull(GraphQLString) },
     balance: { type: new GraphQLNonNull(GraphQLFloat) },
-    // email jest w Profile, nie w User bezpośrednio wg schematu Prisma
   },
 });
 
@@ -136,21 +144,35 @@ export const CreatePostInputGQL = new GraphQLInputObjectType({
   fields: {
     title: { type: new GraphQLNonNull(GraphQLString) },
     content: { type: new GraphQLNonNull(GraphQLString) },
-    authorId: { type: new GraphQLNonNull(GraphQLID) },
+    authorId: { type: new GraphQLNonNull(GraphQLString) },
   },
 });
 
 export const CreateProfileInputGQL = new GraphQLInputObjectType({
   name: 'CreateProfileInput',
   fields: {
-    userId: { type: new GraphQLNonNull(GraphQLID) },
-    memberTypeId: { type: new GraphQLNonNull(GraphQLString) }, // Zgodnie z Prisma, to String
+    userId: { type: new GraphQLNonNull(GraphQLString) },
+    memberTypeId: { type: new GraphQLNonNull(GraphQLString) },
     isMale: { type: new GraphQLNonNull(GraphQLBoolean) },
     yearOfBirth: { type: new GraphQLNonNull(GraphQLInt) },
   },
 });
 
-// Dodaj inne typy wejściowe (UpdatePostInput, UpdateProfileInput) zgodnie z potrzebami
-// np. ChangePostInputGQL, ChangeProfileInputGQL
+export const ChangePostInputGQL = new GraphQLInputObjectType({
+  name: 'ChangePostInput',
+  fields: {
+    title: { type: GraphQLString },
+    content: { type: GraphQLString },
+  },
+});
 
-export const UUIDTypeGQL = GraphQLID; // Alias dla UUID, często mapowane na GraphQLID lub GraphQLString
+export const ChangeProfileInputGQL = new GraphQLInputObjectType({
+  name: 'ChangeProfileInput',
+  fields: {
+    isMale: { type: GraphQLBoolean },
+    yearOfBirth: { type: GraphQLInt },
+    memberTypeId: { type: GraphQLString },
+  },
+});
+
+export const UUIDTypeGQL = GraphQLID;
