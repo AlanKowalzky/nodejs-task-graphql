@@ -129,22 +129,22 @@ export const createResolvers = (fastify: FastifyInstance) => {
       },
     },
     User: {
-      profile: async (parent: User) => {
+      profile: async (parent: UserWithRelations) => {
         return await prisma.profile.findUnique({
           where: { userId: parent.id },
         });
       },
-      posts: async (parent: User) => {
+      posts: async (parent: UserWithRelations) => {
         return await loaders.postLoader.load(parent.id);
       },
-      userSubscribedTo: async (parent: User, _: unknown, __: unknown, info: GraphQLResolveInfo) => {
+      userSubscribedTo: async (parent: UserWithRelations, _: unknown, __: unknown, info: GraphQLResolveInfo) => {
         if (!shouldIncludeSubscriptions() || !shouldIncludeField(info, 'userSubscribedTo')) {
           return [];
         }
         const user = await loaders.userLoader.load(parent.id);
         return user?.userSubscribedTo.map(sub => sub.author) || [];
       },
-      subscribedToUser: async (parent: User, _: unknown, __: unknown, info: GraphQLResolveInfo) => {
+      subscribedToUser: async (parent: UserWithRelations, _: unknown, __: unknown, info: GraphQLResolveInfo) => {
         if (!shouldIncludeSubscriptions() || !shouldIncludeField(info, 'subscribedToUser')) {
           return [];
         }

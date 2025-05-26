@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { test } from 'tap';
-import { build } from '../../dist/test/helper.js';
+import { build } from '../helper.js';
 import {
   createPost,
   createProfile,
@@ -11,7 +11,7 @@ import {
   getUsers,
   gqlQuery,
   subscribeTo,
-} from '../../dist/test/utils/requests.js';
+} from '../utils/requests.js';
 import { MemberTypeId } from '../../src/routes/member-types/schemas.js';
 
 await test('gql-queries', async (t) => {
@@ -230,8 +230,6 @@ await test('gql-queries', async (t) => {
         userId: user1.id,
       },
     });
-
-    console.log(JSON.stringify(data.user, null, 2));
 
     t.ok(data.user.userSubscribedTo[0].id === user2.id);
     t.ok(data.user.userSubscribedTo[0].name === user2.name);
