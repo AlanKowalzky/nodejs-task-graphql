@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { test } from 'tap';
-import { build } from '../helper.js';
+import { build } from '../../dist/test/helper.js';
 import {
   createPost,
   createProfile,
@@ -11,7 +11,7 @@ import {
   getUsers,
   gqlQuery,
   subscribeTo,
-} from '../utils/requests.js';
+} from '../../dist/test/utils/requests.js';
 import { MemberTypeId } from '../../src/routes/member-types/schemas.js';
 
 await test('gql-queries', async (t) => {
