@@ -10,7 +10,7 @@ import {
   GraphQLInputObjectType,
 } from 'graphql';
 import { User, Post, Profile, MemberType } from '@prisma/client';
-import { GraphQLContext } from '../context';
+import { GraphQLContext } from '../context.js';
 
 // Import resolverów dla poszczególnych typów
 import { UserTypeResolvers } from './User.js';
@@ -18,7 +18,34 @@ import { PostTypeResolvers } from './Post.js';
 import { ProfileTypeResolvers } from './Profile.js';
 // MemberTypeResolvers, jeśli są potrzebne
 
-export const MemberTypeGQL: GraphQLObjectType<MemberType, GraphQLContext> = new GraphQLObjectType({
+type MemberTypeFields = {
+  id: string;
+  discount: number;
+  postsLimitPerMonth: number;
+};
+
+type ProfileFields = {
+  id: string;
+  isMale: boolean;
+  yearOfBirth: number;
+  userId: string;
+  memberTypeId: string;
+};
+
+type PostFields = {
+  id: string;
+  title: string;
+  content: string;
+  authorId: string;
+};
+
+type UserFields = {
+  id: string;
+  name: string | null;
+  balance: number;
+};
+
+export const MemberTypeGQL = new GraphQLObjectType<MemberType, GraphQLContext>({
   name: 'MemberType',
   fields: () => ({
     id: { type: new GraphQLNonNull(GraphQLID) },
@@ -28,7 +55,7 @@ export const MemberTypeGQL: GraphQLObjectType<MemberType, GraphQLContext> = new 
   }),
 });
 
-export const ProfileTypeGQL: GraphQLObjectType<Profile, GraphQLContext> = new GraphQLObjectType({
+export const ProfileTypeGQL = new GraphQLObjectType<Profile, GraphQLContext>({
   name: 'Profile',
   fields: () => ({
     id: { type: new GraphQLNonNull(GraphQLID) },
@@ -47,7 +74,7 @@ export const ProfileTypeGQL: GraphQLObjectType<Profile, GraphQLContext> = new Gr
   }),
 });
 
-export const PostTypeGQL: GraphQLObjectType<Post, GraphQLContext> = new GraphQLObjectType({
+export const PostTypeGQL = new GraphQLObjectType<Post, GraphQLContext>({
   name: 'Post',
   fields: () => ({
     id: { type: new GraphQLNonNull(GraphQLID) },
@@ -61,7 +88,7 @@ export const PostTypeGQL: GraphQLObjectType<Post, GraphQLContext> = new GraphQLO
   }),
 });
 
-export const UserTypeGQL: GraphQLObjectType<User, GraphQLContext> = new GraphQLObjectType({
+export const UserTypeGQL = new GraphQLObjectType<User, GraphQLContext>({
   name: 'User',
   fields: () => ({
     id: { type: new GraphQLNonNull(GraphQLID) },
