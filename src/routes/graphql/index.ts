@@ -325,8 +325,78 @@ const schema = new GraphQLSchema({
         args: {
           id: { type: new GraphQLNonNull(UUIDType) },
         },
-        resolve: async (_, { id }, { loaders }) => {
-          return loaders.userLoader.load(id);
+        resolve: async (_, { id }, { prisma, loaders }) => {
+          const user = await prisma.user.findUnique({
+            where: { id },
+            include: {
+              userSubscribedTo: {
+                include: {
+                  author: {
+                    include: {
+                      userSubscribedTo: {
+                        include: { author: true },
+                      },
+                      subscribedToUser: {
+                        include: { subscriber: true },
+                      },
+                    },
+                  },
+                },
+              },
+              subscribedToUser: {
+                include: {
+                  subscriber: {
+                    include: {
+                      userSubscribedTo: {
+                        include: { author: true },
+                      },
+                      subscribedToUser: {
+                        include: { subscriber: true },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          });
+
+          if (!user) {
+            return null;
+          }
+
+          // Funkcja rekurencyjna do primowania loaderów dla użytkownika i jego powiązań
+          function primeUserAndRelations(u) {
+            if (!u || !u.id) return;
+            
+            // Prime userLoader
+            if (!loaders.userLoader._promiseCache.has(u.id)) {
+              loaders.userLoader.prime(u.id, u);
+            }
+
+            // Prime userSubscriptionsLoader
+            if (u.userSubscribedTo) {
+              const userSubscriptions = u.userSubscribedTo.map(sub => sub.author);
+              loaders.userSubscriptionsLoader.prime(u.id, userSubscriptions);
+              userSubscriptions.forEach(primeUserAndRelations);
+            }
+
+            // Prime userSubscribersLoader
+            if (u.subscribedToUser) {
+              const userSubscribers = u.subscribedToUser.map(sub => sub.subscriber);
+              loaders.userSubscribersLoader.prime(u.id, userSubscribers);
+              userSubscribers.forEach(primeUserAndRelations);
+            }
+          }
+
+          // Prime the main user and all related users
+          primeUserAndRelations(user);
+
+          // Return the user with the correct structure
+          return {
+            ...user,
+            userSubscribedTo: user.userSubscribedTo.map(sub => sub.author),
+            subscribedToUser: user.subscribedToUser.map(sub => sub.subscriber),
+          };
         },
       },
       profiles: {

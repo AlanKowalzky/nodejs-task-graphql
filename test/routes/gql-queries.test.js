@@ -231,6 +231,8 @@ await test('gql-queries', async (t) => {
       },
     });
 
+    console.log(JSON.stringify(data.user, null, 2));
+
     t.ok(data.user.userSubscribedTo[0].id === user2.id);
     t.ok(data.user.userSubscribedTo[0].name === user2.name);
     t.ok(data.user.userSubscribedTo[0].subscribedToUser[0].id === user1.id);

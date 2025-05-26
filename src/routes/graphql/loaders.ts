@@ -1,11 +1,7 @@
 import DataLoader from 'dataloader';
 import { PrismaClient, User, SubscribersOnAuthors, Post, Profile, MemberType } from '@prisma/client';
-import { parseResolveInfo, ResolveTree } from 'graphql-parse-resolve-info';
-
-type SubscribersOnAuthorsWithRelations = SubscribersOnAuthors & {
-  author: User;
-  subscriber: User;
-};
+import { parseResolveInfo, ResolveTree, FieldsByTypeName } from 'graphql-parse-resolve-info';
+import { GraphQLResolveInfo } from 'graphql';
 
 export const createLoaders = (prisma: PrismaClient) => {
   const userLoader = new DataLoader<string, User | null>(async (ids: readonly string[]) => {
@@ -24,21 +20,21 @@ export const createLoaders = (prisma: PrismaClient) => {
   const postLoader = new DataLoader<string, Post[]>(async (ids: readonly string[]) => {
     const posts = await prisma.post.findMany({
       where: {
-        authorId: {
-          in: Array.from(ids),
-        },
+        authorId: { in: Array.from(ids) },
       },
     });
 
-    const postMap = new Map<string, Post[]>();
-    ids.forEach((id) => {
-      postMap.set(
-        id,
-        posts.filter((post) => post.authorId === id)
-      );
-    });
+    const postsByAuthorId = new Map<string, Post[]>();
+    // Initialize map for all requested author IDs
+    for (const id of ids) {
+      postsByAuthorId.set(id, []);
+    }
+    // Group posts by authorId
+    for (const post of posts) {
+      postsByAuthorId.get(post.authorId)?.push(post);
+    }
 
-    return ids.map((id) => postMap.get(id) || []);
+    return ids.map((id) => postsByAuthorId.get(id)!); // '!' is safe due to pre-initialization
   });
 
   const profileLoader = new DataLoader<string, Profile | null>(async (ids: readonly string[]) => {
@@ -70,61 +66,60 @@ export const createLoaders = (prisma: PrismaClient) => {
   const userSubscriptionsLoader = new DataLoader<string, User[]>(async (ids: readonly string[]) => {
     const subscriptions = await prisma.subscribersOnAuthors.findMany({
       where: {
-        subscriberId: {
-          in: Array.from(ids),
-        },
+        subscriberId: { in: Array.from(ids) },
+      },
+      include: {
+        author: true,
       },
     });
 
-    const authorIds = subscriptions.map(sub => sub.authorId);
-    const authors = await prisma.user.findMany({
-      where: {
-        id: {
-          in: authorIds,
-        },
-      },
-    });
+    const subscriptionsBySubscriberId = new Map<string, User[]>();
+    // Initialize map for all requested subscriber IDs
+    for (const id of ids) {
+      subscriptionsBySubscriberId.set(id, []);
+    }
 
-    const authorMap = new Map(authors.map(author => [author.id, author]));
-    const subscriptionMap = new Map<string, User[]>();
-    ids.forEach((id) => {
-      const userSubscriptions = subscriptions
-        .filter((sub) => sub.subscriberId === id)
-        .map((sub) => authorMap.get(sub.authorId)!);
-      subscriptionMap.set(id, userSubscriptions);
-    });
-
-    return ids.map((id) => subscriptionMap.get(id) || []);
+    // Group subscribed authors by subscriberId
+    for (const sub of subscriptions) {
+      if (sub.author) { // Ensure author is not null
+        const userAuthors = subscriptionsBySubscriberId.get(sub.subscriberId);
+        if (userAuthors) {
+          userAuthors.push(sub.author);
+          userLoader.prime(sub.author.id, sub.author); // Prime userLoader with the author
+        }
+      }
+    }
+    return ids.map((id) => subscriptionsBySubscriberId.get(id)!);
   });
 
   const userSubscribersLoader = new DataLoader<string, User[]>(async (ids: readonly string[]) => {
     const subscriptions = await prisma.subscribersOnAuthors.findMany({
       where: {
         authorId: {
-          in: Array.from(ids),
-        },
+          in: Array.from(ids) },
+      },
+      include: {
+        subscriber: true,
       },
     });
 
-    const subscriberIds = subscriptions.map(sub => sub.subscriberId);
-    const subscribers = await prisma.user.findMany({
-      where: {
-        id: {
-          in: subscriberIds,
-        },
-      },
-    });
+    const subscribersByAuthorId = new Map<string, User[]>();
+    // Initialize map for all requested author IDs
+    for (const id of ids) {
+      subscribersByAuthorId.set(id, []);
+    }
 
-    const subscriberMap = new Map(subscribers.map(subscriber => [subscriber.id, subscriber]));
-    const subscriberListMap = new Map<string, User[]>();
-    ids.forEach((id) => {
-      const userSubscribers = subscriptions
-        .filter((sub) => sub.authorId === id)
-        .map((sub) => subscriberMap.get(sub.subscriberId)!);
-      subscriberListMap.set(id, userSubscribers);
-    });
-
-    return ids.map((id) => subscriberListMap.get(id) || []);
+    // Group subscribers by authorId
+    for (const sub of subscriptions) {
+      if (sub.subscriber) { // Ensure subscriber is not null
+        const authorSubscribers = subscribersByAuthorId.get(sub.authorId);
+        if (authorSubscribers) {
+          authorSubscribers.push(sub.subscriber);
+          userLoader.prime(sub.subscriber.id, sub.subscriber); // Prime userLoader with the subscriber
+        }
+      }
+    }
+    return ids.map((id) => subscribersByAuthorId.get(id)!);
   });
 
   return {
@@ -137,8 +132,11 @@ export const createLoaders = (prisma: PrismaClient) => {
   };
 };
 
-export const shouldIncludeSubscriptions = (info: any): boolean => {
-  const parsedInfo = parseResolveInfo(info) as ResolveTree;
-  const userFields = parsedInfo.fieldsByTypeName.User || {};
+export const shouldIncludeSubscriptions = (info: GraphQLResolveInfo): boolean => {
+  const parsedInfo = parseResolveInfo(info);
+  if (!parsedInfo) {
+    return false; // Or handle error appropriately
+  }
+  const userFields = (parsedInfo.fieldsByTypeName as FieldsByTypeName).User || {};
   return 'userSubscribedTo' in userFields || 'subscribedToUser' in userFields;
 };

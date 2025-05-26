@@ -8,21 +8,62 @@ const memberTypes: MemberType[] = [
 ];
 
 const users: User[] = [
-  { id: '1', name: 'Test User', balance: 100.0 },
+  { id: '1', name: 'Test User 1', balance: 100.0 },
+  { id: '2', name: 'Test User 2', balance: 200.0 },
+  { id: '3', name: 'Test User 3', balance: 300.0 },
 ];
 
 async function seed() {
+  // Tworzenie typów członkostwa
   for (const memberType of memberTypes) {
     await prisma.memberType.create({
       data: memberType,
     });
   }
 
+  // Tworzenie użytkowników
   for (const user of users) {
     await prisma.user.create({
-      data: user,
+      data: {
+        ...user,
+        profile: {
+          create: {
+            isMale: true,
+            yearOfBirth: 1990,
+            memberTypeId: 'BASIC'
+          }
+        },
+        posts: {
+          create: {
+            title: `Post by ${user.name}`,
+            content: `Content of post by ${user.name}`
+          }
+        }
+      }
     });
   }
+
+  // Tworzenie subskrypcji
+  await prisma.subscribersOnAuthors.create({
+    data: {
+      subscriberId: '1',
+      authorId: '2'
+    }
+  });
+
+  await prisma.subscribersOnAuthors.create({
+    data: {
+      subscriberId: '2',
+      authorId: '3'
+    }
+  });
+
+  await prisma.subscribersOnAuthors.create({
+    data: {
+      subscriberId: '3',
+      authorId: '1'
+    }
+  });
 
   await prisma.$disconnect();
 }
