@@ -11,6 +11,7 @@ import {
 } from 'graphql';
 import { User, Post, Profile, MemberType } from '@prisma/client';
 import { GraphQLContext } from '../context.js';
+import { shouldIncludeSubscriptions } from '../loaders.js';
 
 // Import resolverów dla poszczególnych typów
 import { UserTypeResolvers } from './User.js';
@@ -50,7 +51,7 @@ export const MemberTypeGQL = new GraphQLObjectType({
   name: 'MemberType',
   fields: {
     id: { type: GraphQLString },
-    discount: { type: GraphQLFloat },
+    discount: { type: GraphQLInt },
     monthPostsLimit: { type: GraphQLInt },
   },
 });
@@ -66,22 +67,36 @@ UserTypeGQL = new GraphQLObjectType({
   fields: () => ({
     id: { type: GraphQLString },
     name: { type: GraphQLString },
-    balance: { type: GraphQLFloat },
-    posts: {
-      type: new GraphQLList(new GraphQLNonNull(PostTypeGQL)),
-      resolve: UserTypeResolvers.posts,
+    balance: { type: GraphQLInt },
+    posts: { 
+      type: new GraphQLList(PostTypeGQL),
+      resolve: async (parent: User, _args: unknown, context: GraphQLContext) => {
+        return context.prisma.post.findMany({
+          where: { authorId: parent.id }
+        });
+      }
     },
-    profile: {
+    profile: { 
       type: ProfileTypeGQL,
-      resolve: UserTypeResolvers.profile,
+      resolve: async (parent: User, _args: unknown, context: GraphQLContext) => {
+        return context.prisma.profile.findUnique({
+          where: { userId: parent.id }
+        });
+      }
     },
-    userSubscribedTo: {
-      type: new GraphQLList(new GraphQLNonNull(UserTypeGQL)),
-      resolve: UserTypeResolvers.userSubscribedTo,
+    userSubscribedTo: { 
+      type: new GraphQLList(UserTypeGQL),
+      resolve: async (parent: User, _args: unknown, context: GraphQLContext) => {
+        if (!shouldIncludeSubscriptions()) return [];
+        return context.userSubscriptionsLoader.load(parent.id);
+      }
     },
-    subscribedToUser: {
-      type: new GraphQLList(new GraphQLNonNull(UserTypeGQL)),
-      resolve: UserTypeResolvers.subscribedToUser,
+    subscribedToUser: { 
+      type: new GraphQLList(UserTypeGQL),
+      resolve: async (parent: User, _args: unknown, context: GraphQLContext) => {
+        if (!shouldIncludeSubscriptions()) return [];
+        return context.userSubscribersLoader.load(parent.id);
+      }
     },
   }),
 });
@@ -93,9 +108,11 @@ PostTypeGQL = new GraphQLObjectType({
     title: { type: GraphQLString },
     content: { type: GraphQLString },
     authorId: { type: GraphQLString },
-    author: {
+    author: { 
       type: UserTypeGQL,
-      resolve: PostTypeResolvers.author,
+      resolve: async (parent: Post, _args: unknown, context: GraphQLContext) => {
+        return context.userLoader.load(parent.authorId);
+      }
     },
   }),
 });
@@ -108,13 +125,17 @@ ProfileTypeGQL = new GraphQLObjectType({
     yearOfBirth: { type: GraphQLInt },
     userId: { type: GraphQLString },
     memberTypeId: { type: GraphQLString },
-    user: {
+    user: { 
       type: UserTypeGQL,
-      resolve: ProfileTypeResolvers.user,
+      resolve: async (parent: Profile, _args: unknown, context: GraphQLContext) => {
+        return context.userLoader.load(parent.userId);
+      }
     },
-    memberType: {
+    memberType: { 
       type: MemberTypeGQL,
-      resolve: ProfileTypeResolvers.memberType,
+      resolve: async (parent: Profile, _args: unknown, context: GraphQLContext) => {
+        return context.memberTypeLoader.load(parent.memberTypeId);
+      }
     },
   }),
 });
@@ -127,7 +148,7 @@ export const CreateUserInputGQL = new GraphQLInputObjectType({
   name: 'CreateUserInput',
   fields: {
     name: { type: new GraphQLNonNull(GraphQLString) },
-    balance: { type: new GraphQLNonNull(GraphQLFloat) },
+    balance: { type: new GraphQLNonNull(GraphQLInt) },
   },
 });
 
@@ -135,7 +156,7 @@ export const UpdateUserInputGQL = new GraphQLInputObjectType({
   name: 'UpdateUserInput',
   fields: {
     name: { type: GraphQLString },
-    balance: { type: GraphQLFloat },
+    balance: { type: GraphQLInt },
   },
 });
 
@@ -176,3 +197,63 @@ export const ChangeProfileInputGQL = new GraphQLInputObjectType({
 });
 
 export const UUIDTypeGQL = GraphQLID;
+
+export const QueryTypeGQL = new GraphQLObjectType({
+  name: 'Query',
+  fields: {
+    users: { 
+      type: new GraphQLList(UserTypeGQL),
+      resolve: async (_parent: unknown, _args: unknown, context: GraphQLContext) => {
+        return context.prisma.user.findMany();
+      }
+    },
+    user: { 
+      type: UserTypeGQL, 
+      args: { id: { type: new GraphQLNonNull(GraphQLString) } },
+      resolve: async (_parent: unknown, args: { id: string }, context: GraphQLContext) => {
+        return context.userLoader.load(args.id);
+      }
+    },
+    posts: { 
+      type: new GraphQLList(PostTypeGQL),
+      resolve: async (_parent: unknown, _args: unknown, context: GraphQLContext) => {
+        return context.prisma.post.findMany();
+      }
+    },
+    post: { 
+      type: PostTypeGQL, 
+      args: { id: { type: new GraphQLNonNull(GraphQLString) } },
+      resolve: async (_parent: unknown, args: { id: string }, context: GraphQLContext) => {
+        return context.prisma.post.findUnique({
+          where: { id: args.id }
+        });
+      }
+    },
+    memberTypes: { 
+      type: new GraphQLList(MemberTypeGQL),
+      resolve: async (_parent: unknown, _args: unknown, context: GraphQLContext) => {
+        return context.prisma.memberType.findMany();
+      }
+    },
+    memberType: { 
+      type: MemberTypeGQL, 
+      args: { id: { type: new GraphQLNonNull(GraphQLString) } },
+      resolve: async (_parent: unknown, args: { id: string }, context: GraphQLContext) => {
+        return context.memberTypeLoader.load(args.id);
+      }
+    },
+    profiles: { 
+      type: new GraphQLList(ProfileTypeGQL),
+      resolve: async (_parent: unknown, _args: unknown, context: GraphQLContext) => {
+        return context.prisma.profile.findMany();
+      }
+    },
+    profile: { 
+      type: ProfileTypeGQL, 
+      args: { id: { type: new GraphQLNonNull(GraphQLString) } },
+      resolve: async (_parent: unknown, args: { id: string }, context: GraphQLContext) => {
+        return context.profileLoader.load(args.id);
+      }
+    },
+  },
+});

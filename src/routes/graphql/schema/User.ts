@@ -2,47 +2,28 @@ import { GraphQLFieldResolver, GraphQLResolveInfo } from 'graphql';
 import { User, Post, Profile } from '@prisma/client';
 import { GraphQLContext } from '../context.js';
 import { shouldIncludeSubscriptions } from '../loaders.js';
+import { UserTypeGQL, PostTypeGQL, ProfileTypeGQL } from './types.js';
 
 export const UserTypeResolvers = {
   id: (user: User) => user.id,
   name: (user: User) => user.name,
   balance: (user: User) => user.balance,
-  posts: async (user: User, _: unknown, context: GraphQLContext) => {
-    return context.prisma.post.findMany({
-      where: { authorId: user.id },
-    });
+  posts: (user: User, _: unknown, context: GraphQLContext) => {
+    return context.loaders.postLoader.load(user.id);
   },
-  profile: async (user: User, _: unknown, context: GraphQLContext) => {
-    return context.prisma.profile.findUnique({
-      where: { userId: user.id },
-    });
+  profile: (user: User, _: unknown, context: GraphQLContext) => {
+    return context.loaders.profileLoader.load(user.id);
   },
-  userSubscribedTo: async (user: User, _: unknown, context: GraphQLContext, info: GraphQLResolveInfo) => {
+  userSubscribedTo: (user: User, _: unknown, context: GraphQLContext, info: GraphQLResolveInfo) => {
     if (!shouldIncludeSubscriptions(info)) {
-      return [];
+      return null;
     }
-    return context.prisma.user.findMany({
-      where: {
-        subscribedToUser: {
-          some: {
-            subscriberId: user.id,
-          },
-        },
-      },
-    });
+    return context.loaders.userSubscriptionsLoader.load(user.id);
   },
-  subscribedToUser: async (user: User, _: unknown, context: GraphQLContext, info: GraphQLResolveInfo) => {
+  subscribedToUser: (user: User, _: unknown, context: GraphQLContext, info: GraphQLResolveInfo) => {
     if (!shouldIncludeSubscriptions(info)) {
-      return [];
+      return null;
     }
-    return context.prisma.user.findMany({
-      where: {
-        userSubscribedTo: {
-          some: {
-            authorId: user.id,
-          },
-        },
-      },
-    });
+    return context.loaders.userSubscribersLoader.load(user.id);
   },
 };

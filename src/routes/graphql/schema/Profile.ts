@@ -1,6 +1,6 @@
 import { Profile, User, MemberType } from '@prisma/client';
 import { GraphQLContext } from '../context.js';
-import { UserTypeGQL, MemberTypeGQL } from './types.js';
+import { ProfileTypeGQL, UserTypeGQL, MemberTypeGQL } from './types.js';
 
 export const ProfileTypeResolvers = {
   id: (profile: Profile) => profile.id,
@@ -8,14 +8,10 @@ export const ProfileTypeResolvers = {
   yearOfBirth: (profile: Profile) => profile.yearOfBirth,
   userId: (profile: Profile) => profile.userId,
   memberTypeId: (profile: Profile) => profile.memberTypeId,
-  user: async (profile: Profile, _: unknown, context: GraphQLContext) => {
-    return context.prisma.user.findUnique({
-      where: { id: profile.userId },
-    });
+  user: (profile: Profile, _: unknown, context: GraphQLContext) => {
+    return context.loaders.userLoader.load(profile.userId);
   },
-  memberType: async (profile: Profile, _: unknown, context: GraphQLContext) => {
-    return context.prisma.memberType.findUnique({
-      where: { id: profile.memberTypeId },
-    });
+  memberType: (profile: Profile, _: unknown, context: GraphQLContext) => {
+    return context.loaders.memberTypeLoader.load(profile.memberTypeId);
   },
 };

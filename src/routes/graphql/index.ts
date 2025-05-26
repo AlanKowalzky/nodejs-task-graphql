@@ -4,16 +4,12 @@ import depthLimit from 'graphql-depth-limit';
 import { graphqlSchema } from './schema/schema.js';
 import loadersPlugin from './plugins/loaders.js';
 import prismaPlugin from './plugins/prisma.js';
+import { FastifyInstance } from 'fastify';
+import { createLoaders } from './loaders.js';
+import { PrismaClient } from '@prisma/client';
 
 // Importujemy definicję kontekstu GraphQL
 import { GraphQLContext } from './context.js';
-
-// Importujemy funkcję do tworzenia DataLoaderów
-// Zakładamy, że DataLoadery są tworzone na żądanie lub w ramach pluginu fastify
-// i są dostępne w instancji fastify.
-// Jeśli DataLoadery są tworzone per żądanie, można to zrobić w funkcji `context`.
-// Dla uproszczenia, zakładamy, że są już dostępne w `fastify.loaders`.
-// import { createLoaders } from './loaders.js'; // Jeśli loadery są tworzone tutaj
 
 // Definicja typu dla ciała żądania GraphQL
 interface GraphQLRequestBody {
@@ -27,28 +23,35 @@ const graphqlPlugin: FastifyPluginAsync = async (fastify) => {
   await fastify.register(prismaPlugin);
   await fastify.register(loadersPlugin);
 
+  const prisma = new PrismaClient();
+  const loaders = createLoaders(prisma);
+
   fastify.post('/graphql', async (request, reply) => {
     const { query, variables } = request.body as { query: string; variables?: Record<string, unknown> };
-    
-    // Walidacja głębokości zapytania
-    const depthValidation = depthLimit(5);
-    const validationErrors = validate(graphqlSchema, parse(query), [depthValidation, ...specifiedRules]);
-    
-    if (validationErrors.length > 0) {
-      return reply.code(400).send({ errors: validationErrors });
+
+    try {
+      const document = parse(query);
+      const validationErrors = validate(graphqlSchema, document, [depthLimit(5)]);
+
+      if (validationErrors.length > 0) {
+        return reply.code(400).send({ errors: validationErrors });
+      }
+
+      const result = await graphql({
+        schema: graphqlSchema,
+        source: query,
+        variableValues: variables,
+        contextValue: {
+          prisma,
+          loaders,
+        },
+      });
+
+      return result;
+    } catch (error) {
+      fastify.log.error(error);
+      return reply.code(500).send({ error: 'Internal Server Error' });
     }
-
-    const result = await graphql({
-      schema: graphqlSchema,
-      source: query,
-      variableValues: variables,
-      contextValue: {
-        prisma: fastify.prisma,
-        loaders: fastify.loaders,
-      },
-    });
-
-    return result;
   });
 
   // Endpoint do GraphiQL
@@ -88,4 +91,5 @@ const graphqlPlugin: FastifyPluginAsync = async (fastify) => {
   }
 };
 
+export const graphqlRoute = graphqlPlugin;
 export default graphqlPlugin;

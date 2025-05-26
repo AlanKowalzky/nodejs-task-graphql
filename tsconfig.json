@@ -1,12 +1,18 @@
 {
-  "extends": "fastify-tsconfig",
   "compilerOptions": {
-    "noImplicitAny": false,
-    "noUnusedLocals": false,
+    "target": "ES2020",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "esModuleInterop": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
     "outDir": "dist",
+    "rootDir": "src",
+    "declaration": true,
     "sourceMap": true,
-    "moduleResolution": "nodenext",
-    "module": "NodeNext"
+    "noImplicitAny": false,
+    "noUnusedLocals": false
   },
   "include": ["src/**/*.ts"]
 }
