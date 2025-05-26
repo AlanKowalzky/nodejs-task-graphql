@@ -1,73 +1,72 @@
-import { FastifyPluginAsyncTypebox } from '@fastify/type-provider-typebox';
-import { createGqlResponseSchema, gqlResponseSchema } from './schemas.js';
-import { graphql, parse, validate, specifiedRules, GraphQLError } from 'graphql';
+import { FastifyPluginAsync, FastifyRequest, FastifyReply } from 'fastify';
+import mercurius, { MercuriusContext } from 'mercurius';
 import depthLimit from 'graphql-depth-limit';
-import { createLoaders } from './loaders.js';
-import { schema } from './schema/schema.js'; // Importujemy zbudowany schemat
+
+// Importujemy nasz zbudowany schemat
+import { schema } from './schema/schema.js';
+
+// Importujemy definicję kontekstu GraphQL
 import { GraphQLContext } from './context.js';
 
-const GQL_DEPTH_LIMIT = 5; // Limit głębokości zapytania GraphQL
+// Importujemy funkcję do tworzenia DataLoaderów
+// Zakładamy, że DataLoadery są tworzone na żądanie lub w ramach pluginu fastify
+// i są dostępne w instancji fastify.
+// Jeśli DataLoadery są tworzone per żądanie, można to zrobić w funkcji `context`.
+// Dla uproszczenia, zakładamy, że są już dostępne w `fastify.loaders`.
+// import { createLoaders } from './loaders.js'; // Jeśli loadery są tworzone tutaj
 
-const plugin: FastifyPluginAsyncTypebox = async (fastify) => {
-  const { prisma } = fastify; // Prisma client jest wstrzykiwany przez plugin fastify-prisma
-
-  fastify.route({
-    url: '/', // Endpoint będzie dostępny pod /graphql/ dzięki autoload
-    method: 'POST',
-    schema: {
-      ...createGqlResponseSchema, // Definicja schematu dla walidacji żądania/odpowiedzi
-      response: {
-        200: gqlResponseSchema,
-      },
-    },
-    async handler(req, reply): Promise<unknown> {
-      try {
-        const { query, variables, operationName } = req.body as {
-          query?: string;
-          variables?: Record<string, unknown>;
-          operationName?: string;
-        };
-
-        if (!query) {
-          return reply.status(400).send({ errors: [{ message: 'Query is missing.' }] });
-        }
-
-        let documentAST;
-        try {
-          documentAST = parse(query);
-        } catch (syntaxError: any) {
-          return reply.status(400).send({ errors: [syntaxError] });
-        }
-
-        const validationRulesToApply = [
-          ...specifiedRules,
-          depthLimit(GQL_DEPTH_LIMIT, {}, (errors) => {
-            fastify.log.warn(`GraphQL depth limit exceeded: ${errors.map(e => e.message).join(', ')}`);
-          }),
-        ];
-
-        const validationErrors = validate(schema, documentAST, validationRulesToApply);
-        if (validationErrors.length > 0) {
-          return reply.status(400).send({ errors: validationErrors });
-        }
-
-        const contextValue: GraphQLContext = { prisma, loaders: createLoaders(prisma) };
-
-        return graphql({
-          schema,
-          source: query,
-          variableValues: variables,
-          operationName,
-          contextValue,
-        });
-      } catch (error: any) {
-        fastify.log.error(error, 'Error processing GraphQL request');
-        const errors: GraphQLError[] = error.errors || [new GraphQLError(error.message || 'An unexpected error occurred.')];
-        const statusCode = error.statusCode || error.status || (error.errors ? 400 : 500);
-        return reply.status(statusCode).send({ errors });
+const graphqlPlugin: FastifyPluginAsync = async (fastify) => {
+  fastify.register(mercurius, {
+    schema, // Używamy naszego zaimportowanego schematu
+    graphiql: true, // Włącz GraphiQL dla łatwego testowania
+    // Typowanie kontekstu Mercuriusa dla lepszej integracji z TypeScript
+    context: (
+      request: FastifyRequest,
+      reply: FastifyReply,
+    ): Promise<GraphQLContext> | GraphQLContext => {
+      // Tutaj tworzymy i zwracamy obiekt kontekstu,
+      // który będzie dostępny w każdym resolverze.
+      // Zakładamy, że klient Prisma i DataLoadery są już dołączone
+      // do instancji Fastify przez inne pluginy (np. w src/plugins).
+      if (!fastify.prisma) {
+        throw new Error('Prisma client is not available on Fastify instance.');
       }
+      if (!fastify.loaders) {
+        // Jeśli DataLoadery miałyby być tworzone per żądanie:
+        // const loaders = createLoaders(fastify.prisma);
+        // return { prisma: fastify.prisma, loaders };
+        throw new Error('DataLoaders are not available on Fastify instance.');
+      }
+
+      return {
+        prisma: fastify.prisma,
+        loaders: fastify.loaders,
+        // Możesz tutaj dodać inne elementy do kontekstu, np. request, reply, jeśli potrzebne
+        // request,
+        // reply,
+      };
     },
+    validationRules: [
+      // Dodajemy regułę ograniczającą głębokość zapytań
+      // Ustawiamy limit na 5 zgodnie z wymaganiami zadania
+      depthLimit(5, {
+        // Opcjonalnie: można zignorować pewne pola, jeśli jest taka potrzeba
+        // ignore: [/_trusted$/, 'internalField'],
+      }),
+    ],
+    // Możesz dodać własny errorHandler, jeśli chcesz inaczej obsługiwać błędy GraphQL
+    // errorHandler: (error, request, reply) => {
+    //   reply.log.error(error);
+    //   // Domyślnie mercurius wysyła błędy w formacie GraphQL
+    //   // Możesz zmodyfikować odpowiedź, jeśli jest taka potrzeba
+    //   return {
+    //     statusCode: error.statusCode || 500,
+    //     response: {
+    //       errors: error.errors || [{ message: error.message }],
+    //     },
+    //   };
+    // },
   });
 };
 
-export default plugin;
+export default graphqlPlugin;

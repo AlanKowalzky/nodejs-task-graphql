@@ -1,25 +1,64 @@
 import { GraphQLFieldResolver, GraphQLError } from 'graphql';
+import { User, Post, Profile } from '@prisma/client';
 import { GraphQLContext } from '../context';
-import { User, Post, Profile, Prisma } from '@prisma/client';
 import {
   CreateUserInput,
   UpdateUserInput,
   CreatePostInput,
-  ChangePostInput, // Zmieniono z UpdatePostInput
+  ChangePostInput,
   CreateProfileInput,
-  ChangeProfileInput, // Zmieniono z UpdateProfileInput
-} from './dtoTypes';
+  ChangeProfileInput,
+} from './types'; // Zakładamy, że typy DTO są zdefiniowane w types.ts
 
-export const MutationResolvers: Record<string, GraphQLFieldResolver<unknown, GraphQLContext, any>> = {
-  createUser: async (_parent, { dto }: { dto: CreateUserInput }, context: GraphQLContext): Promise<User> => {
-    // Walidacja email (jeśli jest w User, a nie Profile)
-    // if (await context.prisma.user.findUnique({ where: { email: dto.email } })) {
-    //   throw new GraphQLError('Email already in use.');
-    // }
-    // Zakładając, że CreateUserInput nie zawiera email, zgodnie z modelem User w Prisma
-    return context.prisma.user.create({ data: dto });
+export const MutationResolvers: Record<
+  string,
+  GraphQLFieldResolver<unknown, GraphQLContext, any>
+> = {
+  createUser: async (
+    _parent,
+    { dto }: { dto: CreateUserInput },
+    context: GraphQLContext,
+  ): Promise<User> => {
+    const newUser = await context.prisma.user.create({
+      data: dto,
+    });
+    // Opcjonalnie: Prime userLoader cache
+    context.loaders.userLoader.prime(newUser.id, newUser);
+    return newUser;
   },
-  updateUser: async (_parent, { id, dto }: { id: string; dto: UpdateUserInput }, context: GraphQLContext): Promise<User> => { // Zgodnie ze schematem docelowym zwraca User (nullable)
+
+  createPost: async (
+    _parent,
+    { dto }: { dto: CreatePostInput },
+    context: GraphQLContext,
+  ): Promise<Post> => {
+    const newPost = await context.prisma.post.create({
+      data: dto,
+    });
+    // Opcjonalnie: Prime postLoader cache (jeśli istnieje i jest sensowny)
+    // lub wyczyść cache postów dla danego autora, jeśli postLoader zwraca listę
+    context.loaders.postLoader.clear(newPost.authorId); // Przykład czyszczenia
+    return newPost;
+  },
+
+  createProfile: async (
+    _parent,
+    { dto }: { dto: CreateProfileInput },
+    context: GraphQLContext,
+  ): Promise<Profile> => {
+    const newProfile = await context.prisma.profile.create({
+      data: dto,
+    });
+    // Opcjonalnie: Prime profileLoader cache
+    context.loaders.profileLoader.prime(newProfile.userId, newProfile);
+    return newProfile;
+  },
+
+  changeUser: async (
+    _parent,
+    { id, dto }: { id: string; dto: UpdateUserInput },
+    context: GraphQLContext,
+  ): Promise<User | null> => {
     try {
       const updatedUser = await context.prisma.user.update({
         where: { id },
@@ -28,176 +67,131 @@ export const MutationResolvers: Record<string, GraphQLFieldResolver<unknown, Gra
       context.loaders.userLoader.clear(id).prime(id, updatedUser);
       return updatedUser;
     } catch (error) {
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') { // Record to update not found
-        throw new GraphQLError(`Użytkownik o ID ${id} nie został znaleziony.`);
-      }
-      throw error;
-    }
-  },
-  deleteUser: async (_parent, { id }: { id: string }, context: GraphQLContext): Promise<User> => { // Zgodnie ze schematem docelowym zwraca User (nullable)
-    try {
-      const user = await context.prisma.user.delete({ where: { id } });
-      context.loaders.userLoader.clear(id);
-      return user;
-    } catch (error) {
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') { // Record to delete not found
-        throw new GraphQLError(`Użytkownik o ID ${id} nie został znaleziony.`);
-      }
-      throw error;
+      // Prisma rzuca błąd, jeśli rekord nie zostanie znaleziony przy update
+      // Możemy to obsłużyć, aby zwrócić null zgodnie ze schematem lub rzucić GraphQLError
+      // console.error(error); // Logowanie błędu
+      return null; // Lub rzuć new GraphQLError('User not found') jeśli schemat oczekuje User!
     }
   },
 
-  createPost: async (_parent, { dto }: { dto: CreatePostInput }, context: GraphQLContext): Promise<Post> => {
-    const author = await context.loaders.userLoader.load(dto.authorId);
-    if (!author) {
-      throw new GraphQLError(`Autor o ID ${dto.authorId} nie został znaleziony.`);
-    }
-    return context.prisma.post.create({ data: dto });
-  },
-  // Zgodnie ze schematem docelowym, jest 'changePost', a nie 'updatePost'
-  changePost: async (_parent, { id, dto }: { id: string; dto: ChangePostInput }, context: GraphQLContext): Promise<Post> => { // Zgodnie ze schematem docelowym zwraca Post!
+  changePost: async (
+    _parent,
+    { id, dto }: { id: string; dto: ChangePostInput },
+    context: GraphQLContext,
+  ): Promise<Post | null> => {
     try {
-      // Jeśli dto.authorId jest obecne, sprawdź czy autor istnieje
-      // Uwaga: schema.graphql dla ChangePostInput nie zawiera authorId.
-      // Gdyby authorId mogło być zmieniane, walidacja jego istnienia byłaby tu potrzebna.
-      const updatedPost = await context.prisma.post.update({ where: { id }, data: dto });
-      // Jeśli masz singlePostLoader, możesz chcieć go wypełnić:
-      // context.loaders.singlePostLoader?.clear(id).prime(id, updatedPost);
-      // Również, jeśli authorId zostało zmienione, lista postów starego autora w postLoader byłaby nieaktualna.
+      const updatedPost = await context.prisma.post.update({
+        where: { id },
+        data: dto,
+      });
+      // Wyczyść i zaktualizuj cache dla tego konkretnego posta, jeśli istnieje taki loader
+      // lub wyczyść cache postów dla autora
+      context.loaders.postLoader.clear(updatedPost.authorId);
       return updatedPost;
     } catch (error) {
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
-        throw new GraphQLError(`Post o ID ${id} nie został znaleziony.`);
-      }
-      throw error;
-    }
-  },
-  deletePost: async (_parent, { id }: { id: string }, context: GraphQLContext): Promise<Post> => { // Zgodnie ze schematem docelowym zwraca Post!
-    try {
-      const post = await context.prisma.post.delete({ where: { id } });
-      // context.loaders.singlePostLoader?.clear(id);
-      // Rozważ wyczyszczenie odpowiednich części postLoader, jeśli posty są buforowane według authorId
-      return post;
-    } catch (error) {
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
-        throw new GraphQLError(`Post o ID ${id} nie został znaleziony.`);
-      }
-      throw error;
+      return null;
     }
   },
 
-  createProfile: async (_parent, { dto }: { dto: CreateProfileInput }, context: GraphQLContext): Promise<Profile> => {
-    const user = await context.loaders.userLoader.load(dto.userId);
-    if (!user) throw new GraphQLError(`Użytkownik o ID ${dto.userId} nie został znaleziony.`);
-
-    const memberType = await context.loaders.memberTypeLoader.load(dto.memberTypeId);
-    if (!memberType) throw new GraphQLError(`MemberType o ID ${dto.memberTypeId} nie został znaleziony.`);
-
+  changeProfile: async (
+    _parent,
+    { id, dto }: { id: string; dto: ChangeProfileInput },
+    context: GraphQLContext,
+  ): Promise<Profile | null> => {
     try {
-      const newProfile = await context.prisma.profile.create({ data: dto });
-      context.loaders.profileLoader.clear(dto.userId).prime(dto.userId, newProfile); // Wyczyść przed wypełnieniem
-      return newProfile;
-    } catch (e: any) { // Prisma P2002: Unique constraint failed (userId)
-      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
-        throw new GraphQLError(`Profil dla użytkownika ${dto.userId} już istnieje.`);
-      }
-      throw e;
-    }
-  },
-  // Zgodnie ze schematem docelowym, jest 'changeProfile', a nie 'updateProfile'
-  changeProfile: async (_parent, { id, dto }: { id: string; dto: ChangeProfileInput }, context: GraphQLContext): Promise<Profile> => { // Zgodnie ze schematem docelowym zwraca Profile!
-    try {
-      const existingProfile = await context.prisma.profile.findUnique({ where: { id } });
-      if (!existingProfile) {
-        throw new GraphQLError(`Profil o ID ${id} nie został znaleziony.`);
-      }
-
-      // Walidacja memberTypeId, jeśli jest częścią DTO i jest opcjonalne
-      if (dto.memberTypeId !== undefined && dto.memberTypeId !== null) {
-        const memberType = await context.loaders.memberTypeLoader.load(dto.memberTypeId);
-        if (!memberType) throw new GraphQLError(`MemberType o ID ${dto.memberTypeId} nie został znaleziony.`);
-      }
-       // Nie pozwalamy na zmianę userId dla profilu
-      // DTO ChangeProfileInput nie powinno zawierać userId, jeśli nie jest aktualizowalne.
-      // const { userId, ...restDto } = dto;
-      // if (userId && userId !== existingProfile.userId) {
-      //   throw new GraphQLError('Cannot change userId for an existing profile.');
-      // }
-
-      // Upewnij się, że dto nie zawiera userId, jeśli nie powinno być aktualizowane
-      const updateData: Partial<ChangeProfileInput> = { ...dto };
-      delete (updateData as any).userId; // Usuń userId z danych do aktualizacji, jeśli istnieje w DTO
-      const updatedProfile = await context.prisma.profile.update({ where: { id }, data: updateData });
+      const updatedProfile = await context.prisma.profile.update({
+        where: { id }, // Zakładamy, że 'id' to Profile.id
+        data: dto,
+      });
       context.loaders.profileLoader.clear(updatedProfile.userId).prime(updatedProfile.userId, updatedProfile);
       return updatedProfile;
     } catch (error) {
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
-        throw new GraphQLError(`Profil o ID ${id} nie został znaleziony.`);
-      }
-      throw error;
+      return null;
     }
   },
-  deleteProfile: async (_parent, { id }: { id: string }, context: GraphQLContext): Promise<Profile> => { // Zgodnie ze schematem docelowym zwraca Profile!
+
+  deleteUser: async (
+    _parent,
+    { id }: { id: string },
+    context: GraphQLContext,
+  ): Promise<User | null> => {
     try {
-      const profile = await context.prisma.profile.findUnique({where: {id}});
-      if (!profile) {
-        throw new GraphQLError(`Profil o ID ${id} nie został znaleziony.`);
-      }
+      const deletedUser = await context.prisma.user.delete({ where: { id } });
+      context.loaders.userLoader.clear(id);
+      return deletedUser;
+    } catch (error) {
+      return null;
+    }
+  },
+
+  deletePost: async (
+    _parent,
+    { id }: { id: string },
+    context: GraphQLContext,
+  ): Promise<Post | null> => {
+    try {
+      // Najpierw pobierz post, aby uzyskać authorId do wyczyszczenia cache'u
+      const postToDelete = await context.prisma.post.findUnique({ where: { id } });
+      if (!postToDelete) return null;
+
+      await context.prisma.post.delete({ where: { id } });
+      context.loaders.postLoader.clear(postToDelete.authorId);
+      return postToDelete;
+    } catch (error) {
+      return null;
+    }
+  },
+
+  deleteProfile: async (
+    _parent,
+    { id }: { id: string },
+    context: GraphQLContext,
+  ): Promise<Profile | null> => {
+    try {
+      const profileToDelete = await context.prisma.profile.findUnique({ where: { id } });
+      if (!profileToDelete) return null;
+
       await context.prisma.profile.delete({ where: { id } });
-      context.loaders.profileLoader.clear(profile.userId);
-      return profile;
+      context.loaders.profileLoader.clear(profileToDelete.userId);
+      return profileToDelete;
     } catch (error) {
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
-        // Ten przypadek jest już obsłużony przez sprawdzenie findUnique powyżej,
-        // ale warto o tym pamiętać dla innych wzorców usuwania.
-        throw new GraphQLError(`Profil o ID ${id} nie został znaleziony.`);
-      }
-      throw error;
+      return null;
     }
   },
 
-  subscribeTo: async (_parent, { userId, authorId }: { userId: string, authorId: string }, context: GraphQLContext): Promise<User> => { // Zgodnie ze schematem docelowym zwraca User (nullable)
-    if (userId === authorId) {
-      throw new GraphQLError("Użytkownik nie może subskrybować samego siebie.");
-    }
-
-    const [user, author] = await Promise.all([
-      context.loaders.userLoader.load(userId),
-      context.loaders.userLoader.load(authorId),
-    ]);
-
-    if (!user) throw new GraphQLError(`Subskrybujący użytkownik o ID ${userId} nie został znaleziony.`);
-    if (!author) throw new GraphQLError(`Autor o ID ${authorId} nie został znaleziony.`);
-
-    try {
-      await context.prisma.subscribersOnAuthors.create({
-        data: { subscriberId: userId, authorId: authorId },
-      });
-      context.loaders.userSubscriptionsLoader.clear(userId);
-      context.loaders.userSubscribersLoader.clear(authorId);
-      return user; // Zwróć użytkownika, który zainicjował subskrypcję
-    } catch (error) {
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
-        throw new GraphQLError(`Użytkownik ${userId} już subskrybuje autora ${authorId}.`);
-      }
-      throw error;
-    }
-  },
-
-  unsubscribeFrom: async (_parent, { userId, authorId }: { userId: string, authorId: string }, context: GraphQLContext): Promise<User> => { // Zgodnie ze schematem docelowym zwraca User (nullable)
-    const user = await context.loaders.userLoader.load(userId);
-    if (!user) throw new GraphQLError(`Użytkownik o ID ${userId} nie został znaleziony.`);
-    // Nie ma potrzeby sprawdzania, czy autor istnieje, ponieważ deleteMany nie rzuci błędu, jeśli rekord nie istnieje.
-
-    await context.prisma.subscribersOnAuthors.deleteMany({ // Użyj deleteMany na wypadek, gdyby klucz główny nie został znaleziony przez delete (chociaż powinien)
-        where: { subscriberId: userId, authorId: authorId },
+  subscribeTo: async (
+    _parent,
+    { userId, authorId }: { userId: string; authorId: string },
+    context: GraphQLContext,
+  ): Promise<User | null> => {
+    await context.prisma.subscribersOnAuthors.create({
+      data: {
+        subscriberId: userId,
+        authorId,
+      },
     });
-    // deleteMany nie rzuca P2025, jeśli żadne rekordy nie zostaną usunięte.
-    // Aby upewnić się, że subskrypcja istniała, można dodać findFirst przed usunięciem.
-    // Jednak w przypadku anulowania subskrypcji często dopuszczalne jest, jeśli rekord nie istniał.
-
+    // Wyczyść cache subskrypcji dla obu użytkowników
     context.loaders.userSubscriptionsLoader.clear(userId);
     context.loaders.userSubscribersLoader.clear(authorId);
-    return user; // Zwróć użytkownika, który zainicjował anulowanie subskrypcji
+    return context.loaders.userLoader.load(userId); // Zwróć subskrybującego użytkownika
+  },
+
+  unsubscribeFrom: async (
+    _parent,
+    { userId, authorId }: { userId: string; authorId: string },
+    context: GraphQLContext,
+  ): Promise<User | null> => {
+    await context.prisma.subscribersOnAuthors.delete({
+      where: {
+        subscriberId_authorId: {
+          subscriberId: userId,
+          authorId,
+        },
+      },
+    });
+    // Wyczyść cache subskrypcji dla obu użytkowników
+    context.loaders.userSubscriptionsLoader.clear(userId);
+    context.loaders.userSubscribersLoader.clear(authorId);
+    return context.loaders.userLoader.load(userId); // Zwróć subskrybującego użytkownika
   },
 };

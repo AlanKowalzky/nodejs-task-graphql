@@ -1,9 +1,9 @@
 import { GraphQLFieldResolver, GraphQLResolveInfo } from 'graphql';
-import { GraphQLContext } from '../context.js';
 import { User, Post, Profile, MemberType } from '@prisma/client';
-import { shouldIncludeSubscriptions } from '../loaders.js';
+import { GraphQLContext } from '../context';
+import { shouldIncludeSubscriptions } from '../loaders';
 
-// Helper function to check if an object is a Prisma User (basic check)
+// Pomocnicza funkcja do sprawdzania, czy obiekt jest użytkownikiem Prisma (podstawowe sprawdzenie)
 function isUser(obj: any): obj is User {
   return obj && typeof obj.id === 'string' && typeof obj.balance === 'number';
 }
@@ -13,17 +13,38 @@ export const QueryResolvers: Record<string, GraphQLFieldResolver<unknown, GraphQ
     const includeSubs = shouldIncludeSubscriptions(info);
     const usersFromDb = await context.prisma.user.findMany({
       include: {
-        userSubscribedTo: includeSubs ? { include: { author: true } } : false,
-        subscribedToUser: includeSubs ? { include: { subscriber: true } } : false,
+        // Warunkowe dołączanie zagnieżdżonych obiektów User dla autora i subskrybenta
+        userSubscribedTo: includeSubs
+          ? {
+              include: {
+                author: true, // Teraz sub.author będzie obiektem User
+              },
+            }
+          : false,
+        subscribedToUser: includeSubs
+          ? {
+              include: {
+                subscriber: true, // Teraz sub.subscriber będzie obiektem User
+              },
+            }
+          : false,
       },
     });
 
-    // Prime cache
+    // Wypełnianie pamięci podręcznej (cache priming) - test-loader-prime
     usersFromDb.forEach(user => {
       context.loaders.userLoader.prime(user.id, user);
       if (includeSubs) {
-        user.userSubscribedTo?.forEach(sub => sub.author && isUser(sub.author) && context.loaders.userLoader.prime(sub.author.id, sub.author));
-        user.subscribedToUser?.forEach(sub => sub.subscriber && isUser(sub.subscriber) && context.loaders.userLoader.prime(sub.subscriber.id, sub.subscriber));
+        user.userSubscribedTo?.forEach(sub => {
+          if (sub.author && isUser(sub.author)) {
+            context.loaders.userLoader.prime(sub.author.id, sub.author);
+          }
+        });
+        user.subscribedToUser?.forEach(sub => {
+          if (sub.subscriber && isUser(sub.subscriber)) {
+            context.loaders.userLoader.prime(sub.subscriber.id, sub.subscriber);
+          }
+        });
       }
     });
     return usersFromDb;
@@ -32,7 +53,7 @@ export const QueryResolvers: Record<string, GraphQLFieldResolver<unknown, GraphQ
     return context.loaders.userLoader.load(id);
   },
   posts: (_parent, _args, context: GraphQLContext): Promise<Post[]> => {
-    return context.prisma.post.findMany();
+    return context.prisma.post.findMany(); // Proste pobranie wszystkich postów
   },
   post: (_parent, { id }: { id: string }, context: GraphQLContext): Promise<Post | null> => {
     // Zakładamy, że nie ma dedykowanego singlePostLoader, używamy Prisma bezpośrednio
@@ -48,7 +69,11 @@ export const QueryResolvers: Record<string, GraphQLFieldResolver<unknown, GraphQ
     return context.prisma.profile.findMany();
   },
   profile: (_parent, { id }: { id: string }, context: GraphQLContext): Promise<Profile | null> => {
-    // Zakładamy, że 'id' to Profile.id, a profileLoader jest kluczem userId
+    // Zakładamy, że 'id' to Profile.id, a profileLoader jest kluczowany przez userId.
+    // Jeśli chcemy pobierać profil po jego własnym ID, potrzebny byłby inny loader lub bezpośrednie zapytanie.
+    // Dla uproszczenia, jeśli profileLoader jest na userId, to zapytanie o profil po jego ID
+    // powinno być obsługiwane inaczej lub ten resolver powinien przyjmować userId.
+    // Na razie zostawiamy bezpośrednie zapytanie Prisma, zakładając, że 'id' to Profile.id.
     return context.prisma.profile.findUnique({ where: { id } });
   },
 };
